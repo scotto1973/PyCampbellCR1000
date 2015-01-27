@@ -109,9 +109,13 @@ class PakBus(object):
             # Read until first \xBD frame character
             byte = self._read_one_byte()
         while byte == b'\xBD':
+            if time.time() - begin > self.link.timeout: #  prevent hang
+                return None
             # Read unitl first character other than \xBD
             byte = self._read_one_byte()
         while byte != b'\xBD':
+            if time.time() - begin > self.link.timeout:  #  prevent hang
+                return None
             # Read until next occurence of \xBD character
             all_bytes.append(byte)
             byte = self._read_one_byte()
@@ -685,6 +689,8 @@ class PakBus(object):
                 fld['Description'] = values[2]
                 fld['BegIdx'] = values[3]
                 fld['Dimension'] = values[4]
+
+                LOGGER.info('Field %s dimension %s begidx %s units %s' % (fld['FieldName'],fld['Dimension'],fld['BegIdx'],fld['Units']))
                 offset += size
 
                 # Extract sub dimension (if any)
@@ -693,9 +699,11 @@ class PakBus(object):
                 # sub-dimension list terminator reached
                 while subdim != 0:
                     (subdim,), size = self.decode_bin(['UInt4'], raw[offset:])
+                    LOGGER.info('subdim %s size %s' % (subdim,size))
                     offset += size
                     if subdim != 0:
                         fld['SubDim'].append(subdim)
+                        LOGGER.info('appending %s' % fld['SubDim'])
 
                 # append current field definition to list
                 tblfld.append(fld)
@@ -791,6 +799,7 @@ class PakBus(object):
                         fieldname = t_frag['Fields'][field - 1]['FieldName']
                         fieldtype = t_frag['Fields'][field - 1]['FieldType']
                         dimension = t_frag['Fields'][field - 1]['Dimension']
+                        LOGGER.info('fieldname %s fieldtype %s dimension %s' % (fieldname, fieldtype, dimension))  
                         if fieldtype == 'ASCII':
                             values, size = self.decode_bin([fieldtype],
                                                            raw[offset:],
@@ -800,10 +809,17 @@ class PakBus(object):
                             values, size = \
                                 self.decode_bin(dimension * [fieldtype],
                                                 raw[offset:])
-                            record['Fields'][fieldname] = values[0]
-                        offset += size
-                    frag['RecFrag'].append(record)
 
+                           
+                            for idx in range (0,dimension):
+                                tmpfieldname = fieldname + '(' + str(idx) +  ')'
+                                record['Fields'][tmpfieldname] = values[idx]
+                                LOGGER.info('tmpfieldname %s value %s' % (tmpfieldname, record['Fields'][tmpfieldname])  )
+                          	# QCSI End - SO
+
+                        offset += size
+                    frag['RecFrag'].append(record)    
+                
             recdata.append(frag)
 
         # Get flag if more records exist

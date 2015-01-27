@@ -11,6 +11,7 @@
 '''
 from __future__ import division, unicode_literals
 import time
+import os.path 
 
 from datetime import datetime, timedelta
 from pylink import link_from_url
@@ -77,6 +78,21 @@ class CR1000(object):
         send_time = timedelta(seconds=int((end - begin) / 2))
         return response[0], response[1], send_time
 
+    def send_wait_retry(self, cmd):
+        packet, transac_id = cmd
+        begin = time.time()
+        attempt = 0
+        while(attempt < 3):
+            self.pakbus.write(packet)
+            response = self.pakbus.wait_packet(transac_id)
+            # if this is a good response, break...
+            if response[0] != {}:
+                break
+            attempt += 1
+        end = time.time()
+        send_time = timedelta(seconds=int((end - begin) / 2))
+        return response[0], response[1], send_time
+
     def ping_node(self):
         '''Check if remote host is available.'''
         # send hello command and wait for response packet
@@ -137,7 +153,7 @@ class CR1000(object):
                                                  closeflag=0x00,
                                                  transac_id=transac_id)
             transac_id = cmd[1]
-            hdr, msg, send_time = self.send_wait(cmd)
+            hdr, msg, send_time = self.send_wait_retry(cmd)
             try:
                 if msg['RespCode'] == 1:
                     raise ValueError("Permission denied")
@@ -167,10 +183,62 @@ class CR1000(object):
     @cached_property
     def table_def(self):
         '''Return table definition.'''
-        data = self.getfile('.TDF')
-        # List tables
-        tabledef = self.pakbus.parse_tabledef(data)
+        
+        # Check to see if we've got a cached copy of the table def for this device...
+        if self.cache_exists('.TDF'):
+            tabledef = self.load_cache('.TDF')
+        else:
+            print("Reading tabledef from device")
+            data = self.getfile('.TDF')
+            # List tables
+            tabledef = self.pakbus.parse_tabledef(data)
+            self.record_cache('.TDF', data)
+        
         return tabledef
+
+
+    def cache_filename(self, fname):
+        path = os.environ['SVHOME'] + '\\Custom\\CR1000'
+        if not os.path.exists(path):
+            os.makedirs(path)
+    
+        target = path + '\\Device' + str(self.pakbus.dest_node) + fname
+        return target
+    
+    def cache_exists(self, fname):
+        target = self.cache_filename(fname)
+    
+        print("Testing for tabledef cache " + target)
+        return os.path.isfile(target)
+    
+    def load_cache(self, fname):
+        target = self.cache_filename(fname)
+        
+        print("Loading tabledef cache " + target)
+        
+        file = open(target, 'rb')  #SJO 
+        data = file.read()
+                
+        tabledef = self.pakbus.parse_tabledef(data)
+        
+        return tabledef
+    
+    def record_cache(self, fname, data):
+        target = self.cache_filename(fname)
+        
+        print("Recording tabledef cache " + target)
+        
+        try:
+            file = open(target, 'wb') #SJO
+            offset = 0
+            while offset < len(data):
+                file.write(data[offset])
+                offset += 1
+            file.close()
+            
+        except:
+            print("Failed to create cache file " + target)
+				
 
     def list_tables(self):
         '''List the tables available in the datalogger.'''
@@ -206,7 +274,7 @@ class CR1000(object):
         # Send collect data request
         cmd = self.pakbus.get_collectdata_cmd(tablenbr, tabledefsig, mode,
                                               p1, p2)
-        hdr, msg, send_time = self.send_wait(cmd)
+        hdr, msg, send_time = self.send_wait_retry(cmd)
         more = True
         data, more = self.pakbus.parse_collectdata(msg['RecData'], tabledef)
         # Return parsed record data and flag if more records exist
